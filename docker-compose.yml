@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # JupyterHub service
+  jupyterhub:
+    build: 
+      context: ./jupyterhub
+      dockerfile: Dockerfile
+    image: jupyterhub-custom:latest
+    container_name: jupyterhub
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8000:8000"  # Bind to all interfaces for external access
+    networks:
+      jupyterhub_network:
+        ipv4_address: 172.20.0.10
+    volumes:
+      - jupyterhub-data:/srv/jupyterhub
+      - jupyterhub-user-homes:/home
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    environment:
+      - DOCKER_NOTEBOOK_IMAGE=${DOCKER_USER_IMAGE:-jupyter-user-gemini:latest}
+      - DOCKER_NETWORK_NAME=jupyterhub_network
+      - JUPYTERHUB_ADMIN_USERS=${JUPYTERHUB_ADMIN_USERS:-admin@example.com}
+      - JUPYTERHUB_PROXY_AUTH_TOKEN=${JUPYTERHUB_PROXY_AUTH_TOKEN}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/db_password
+      - ALLOWED_USERS=${ALLOWED_USERS:-}
+      - ALLOWED_EMAIL_DOMAINS=${ALLOWED_EMAIL_DOMAINS:-}
+      - OPEN_SIGNUP=${OPEN_SIGNUP:-false}
+      - JUPYTERHUB_LOG_LEVEL=${JUPYTERHUB_LOG_LEVEL:-INFO}
+      - USER_CPU_LIMIT=${USER_CPU_LIMIT:-2.0}
+      - USER_MEM_LIMIT=${USER_MEM_LIMIT:-4G}
+    secrets:
+      - db_password
+      - jupyterhub_cookie_secret
+      - proxy_auth_token
+      - jwt_secret
+    depends_on:
+      - db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/hub/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Database service for JupyterHub
+  db:
+    image: postgres:15
+    container_name: jupyterhub_db
+    restart: unless-stopped
+    networks:
+      jupyterhub_network:
+        ipv4_address: 172.20.0.20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: jupyterhub
+      POSTGRES_USER: jupyterhub
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+
+  # Note: Cloudflare tunnel is handled by existing server at 192.168.0.200
+  # This service will route traffic to JupyterHub at 192.168.0.202:8000
+
+networks:
+  jupyterhub_network:
+    driver: bridge
+    name: jupyterhub_network
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: jupyterhub-br0
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+
+volumes:
+  jupyterhub-data:
+    name: jupyterhub-data
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/jupyterhub
+  jupyterhub-user-homes:
+    name: jupyterhub-user-homes  
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/user-homes
+  postgres-data:
+    name: postgres-data
+    driver: local
+    driver_opts:
+      type: none
+      o: bind  
+      device: ${PWD}/data/postgres
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  jupyterhub_cookie_secret:
+    file: ./secrets/jupyterhub_cookie_secret
+  proxy_auth_token:
+    file: ./secrets/proxy_auth_token.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
