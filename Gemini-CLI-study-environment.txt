@@ -111,21 +111,21 @@ JupyterHubがユーザーセッションをDockerコンテナとして起動で�
    * c.DockerSpawner.remove = True: ユーザーがセッションを終了した際にコンテナを自動的に削除し、システムをクリーンに保つための設定です 28。
 
 
-2.2. GitHub OAuthenticatorによる堅牢なユーザー認証
+2.2. メールアドレスベース認証による堅牢なユーザー認証
 
 
 デフォルトのPAM認証（ローカルのシステムユーザーに依存）21 は管理が煩雑なため、
-OAuthenticatorを導入します 21。具体的には、開発者中心の小規模グループに最適な
-GitHubOAuthenticator 10 を使用し、ユーザーが既存のGitHubアカウントでログインできるようにします。
-jupyterhub_config.pyには、GitHub OAuth Appを作成して取得する必要があるoauth_callback_url、client_id、client_secretを設定するためのプレースホルダーと明確な指示を含めます 10。
-そして最も重要な点として、c.GitHubOAuthenticator.allowed_organizations 10 を用いて、特定のGitHub組織やチームのメンバーのみがログインできるようにアクセスを制限します。これにより、「仲間内」という要件を確実に満たします。
+メールアドレスベースの認証を導入します。具体的には、小規模グループに最適な
+NativeAuthenticatorまたはDummyAuthenticatorを使用し、ユーザーが既存のメールアドレスでログインできるようにします。
+jupyterhub_config.pyには、許可するメールアドレスのリストやドメイン制限を設定するためのプレースホルダーと明確な指示を含めます。
+そして最も重要な点として、c.Authenticator.allowed_users を用いて、特定のメールアドレスのユーザーのみがログインできるようにアクセスを制限します。これにより、「仲間内」という要件を確実に満たします。Cloudflareアクセス制御と同じメールアドレスを使用することで、認証フローが統一され、管理が簡素化されます。
 
 
 2.3. ハブデータの永続化
 
 
 JupyterHubのデータベース（ユーザー情報やセッション状態を保存）は、Dockerの永続ボリュームに保存されるようにします。この設定自体は第4章のdocker-compose.ymlで行いますが、ハブが再起動しても状態を維持できる仕組みとしてここで概念的に触れておきます。
-このアーキテクチャは、意図的に二重のセキュリティゲートを設けています。第一のゲートはCloudflare Access（第5章）で、ユーザーがJupyterHubのログインページに到達する前に、その人物が正当なメンバーであるかを検証します。第二のゲートがJupyterHubのOAuthenticatorであり、再度本人確認を行うと共に、対応するサーバーインスタンスを割り当てます。この多層防御アプローチは、単一の認証機構に依存するよりもはるかに安全です。攻撃者は、まずCloudflareのゼロトラストチェックを突破しなければ、JupyterHubのログイン機構に対する脆弱性攻撃を試みることすらできません。この階層化されたモデルが、自宅サーバーに堅牢な保護を提供します。
+このアーキテクチャは、意図的に二重のセキュリティゲートを設けています。第一のゲートはCloudflare Access（第5章）で、ユーザーがJupyterHubのログインページに到達する前に、その人物が正当なメンバーであるかをメールアドレスベースで検証します。第二のゲートがJupyterHubのメールアドレス認証であり、同じメールアドレスで再度本人確認を行うと共に、対応するサーバーインスタンスを割り当てます。この多層防御アプローチは、単一の認証機構に依存するよりもはるかに安全です。攻撃者は、まずCloudflareのゼロトラストチェックを突破しなければ、JupyterHubのログイン機構に対する脆弱性攻撃を試みることすらできません。この階層化されたモデルが、自宅サーバーに堅牢な保護を提供します。
 
 
 完全なjupyterhub_config.py（アノテーション付き）
@@ -171,19 +171,24 @@ c.DockerSpawner.volumes = {
 }
 
 # --- Authenticator Configuration ---
-# GitHub OAuthenticatorを使用
-c.JupyterHub.authenticator_class = 'oauthenticator.github.GitHubOAuthenticator'
+# メールアドレスベース認証を使用
+# 小規模チーム向けにはNativeAuthenticatorまたはDummyAuthenticatorを選択
+c.JupyterHub.authenticator_class = 'nativeauthenticator.NativeAuthenticator'
+# または、よりシンプルな認証の場合：
+# c.JupyterHub.authenticator_class = 'jupyterhub.auth.DummyAuthenticator'
 
-# GitHub OAuth Appから取得した情報を環境変数経由で設定
-c.GitHubOAuthenticator.oauth_callback_url = os.environ
-c.GitHubOAuthenticator.client_id = os.environ
-c.GitHubOAuthenticator.client_secret = os.environ
-
-# アクセスを許可するGitHub Organization（複数指定可）
-# これにより、指定された組織のメンバーのみがログイン可能になる
-c.GitHubOAuthenticator.allowed_organizations = {
-   'your-github-organization-name'
+# 許可するユーザーのメールアドレスリスト
+c.Authenticator.allowed_users = {
+   'user1@your-domain.com',
+   'user2@your-domain.com',
+   'user3@example.com'
 }
+
+# NativeAuthenticatorの場合の追加設定
+# 自己登録を無効化（管理者のみがユーザーを追加可能）
+c.NativeAuthenticator.open_signup = False
+# 管理者による承認が必要
+c.NativeAuthenticator.ask_email_on_signup = True
 
 # --- Hub Configuration ---
 # ハブがコンテナ内からアクセス可能なIPアドレスでリッスンするように設定
