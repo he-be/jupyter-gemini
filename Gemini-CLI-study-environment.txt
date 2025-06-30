@@ -27,8 +27,8 @@ ________________
 このシステムが実際に動作する際の典型的なシナリオは以下の通りです。
 1. アクセス要求: 利用者は、公開された特定のURL（例: jupyter.your-domain.com）にWebブラウザでアクセスします。
 2. 認証（第一段階）: このリクエストはまずCloudflareのグローバルネットワークに到達します。Cloudflare Accessがリクエストを傍受し、事前に設定されたアクセスポリシーに基づき、利用者のアイデンティティ（例: 特定のメールアドレスやGitHub組織のメンバーシップ）を検証します 7。
-3. セキュアトンネル: 認証に成功したリクエストのみが、Cloudflare Tunnelを通じて自宅サーバーへ安全に転送されます。この通信は、サーバー側で動作する軽量なデーモンcloudflaredがCloudflareネットワークに対して確立したアウトバウンド接続を利用します。このアーキテクチャの核心は、自宅サーバーのファイアウォールで一切のインバウンドポートを開放する必要がない点にあり、これにより外部からの直接的な攻撃を原理的に不可能にします 5。
-4. ハブへの到達: cloudflaredデーモンは、受け取ったリクエストを内部ネットワーク上のJupyterHubコンテナに転送します。
+3. セキュアトンネル: 認証に成功したリクエストのみが、Cloudflare Tunnelを通じて自宅ネットワークへ安全に転送されます。この通信は、既存のRaspberry Pi（192.168.0.200）で動作するcloudflaredデーモンがCloudflareネットワークに対して確立したアウトバウンド接続を利用します。このアーキテクチャの核心は、自宅ネットワークのファイアウォールで一切のインバウンドポートを開放する必要がない点にあり、これにより外部からの直接的な攻撃を原理的に不可能にします 5。
+4. ハブへの到達: 既存のcloudflaredデーモン（192.168.0.200）は、受け取ったリクエストを内部ネットワーク上のJupyterHubサーバー（192.168.0.202）に転送します。
 5. 認証（第二段階）とサーバー起動: JupyterHubは、GitHub OAuthなどを利用して再度利用者を認証します 9。認証後、JupyterHubに統合されたDockerSpawnerが、その利用者のためだけに専用のDockerコンテナを起動します 2。このコンテナには、あらかじめプログラミング言語、ライブラリ、そしてGemini CLIがインストールされています。
 6. セッション開始: 利用者のブラウザは、自身の専用コンテナ内で稼働するJupyterLabサーバーとの間にセッションを確立します。以降のすべての通信は、Cloudflare Tunnelを介して安全にプロキシされ、利用者は隔離されたセキュアな環境で学習や開発を行うことができます。
 この設計は、すべてのアクセス要求を信頼せず、常に検証するという「ゼロトラスト」セキュリティモデルを徹底的に実装したものです 12。
@@ -42,7 +42,7 @@ ________________
 * Docker & DockerSpawner: コンテナ仮想化技術を提供するエンジン（Docker）と、JupyterHubがユーザーセッションを個別のDockerコンテナ内で起動できるようにするためのプラグイン（DockerSpawner）です 2。
 * カスタムDockerイメージ: Python、JupyterLab、各種ライブラリ、そしてGemini CLIを含む、利用者向けの学習環境をパッケージ化したものです。このイメージを事前に作成することで、全利用者に同一で再現性の高い環境を提供します 14。
 * Docker Compose: JupyterHubやプロキシなど、複数のコンテナから成るアプリケーションスタック全体を単一のホストサーバー上で定義し、連携させ、実行するためのオーケストレーションツールです 16。
-* Cloudflare Tunnel (cloudflared): 公開IPアドレスを露出させることなく、プライベートな自宅サーバーをCloudflareのネットワークに安全に接続するためのゲートウェイデーモンです 5。
+* Cloudflare Tunnel (cloudflared): 公開IPアドレスを露出させることなく、プライベートな自宅ネットワークをCloudflareのネットワークに安全に接続するためのゲートウェイデーモンです。本構成では、既存のRaspberry Pi（192.168.0.200）でcloudflaredが稼働しており、JupyterHubサーバー（192.168.0.202）への内部ルーティングを行います 5。
 * Cloudflare Access: トンネルに到達する前のトラフィックに対して、ユーザー認証と認可ポリシーを適用するゼロトラストポリシーエンジンです 7。
 * Gemini CLI: 各利用者のターミナル環境に直接統合される、AI搭載のコーディングアシスタントです 3。
 
@@ -292,7 +292,7 @@ ________________
 
 
    * jupyterhubサービス: このサービスは、jupyterhub/jupyterhubのベースイメージに、我々が作成したjupyterhub_config.pyをコピーするだけのシンプルなDockerfileからビルドされます 1。他のコンテナを起動（スポーン）する権限を持つため、ホストのDockerソケットに接続するように設定します。
-   * cloudflaredサービス: cloudflare/cloudflaredイメージ専用のサービスです。このコンテナの唯一の役割は、Cloudflare Tunnelを実行し、内部のDockerネットワークをCloudflareに接続することです 6。
+   * 内部ルーティング設定: cloudflaredは既存のRaspberry Pi（192.168.0.200）で実行されているため、Docker Composeでのcloudflaredサービス定義は不要です。代わりに、既存のCloudflare Tunnel設定でJupyterHubサーバー（192.168.0.202:8000）への内部ルーティングを設定します。
 
 
 4.2. コンテナ間ネットワーク
@@ -305,8 +305,9 @@ docker-compose.yml内でカスタムブリッジネットワークを定義し�
 
 
 docker-compose.ymlのトップレベルにsecretsブロックを定義し、システムで利用する機密情報を管理します 37。
-   * GITHUB_CLIENT_ID、GITHUB_CLIENT_SECRET、そしてCLOUDFLARE_TUNNEL_TOKENをシークレットとして定義します。
+   * JupyterHub Cookie Secretや、メールアドレス認証で必要な機密情報をシークレットとして定義します。
    * これらのシークレットは、各サービスにファイルとしてマウントされます。これにより、機密情報がdocker-compose.ymlファイル自体に書き込まれたり、docker inspectコマンドの出力に現れたりすることを防ぎます。
+   * CLOUDFLARE_TUNNEL_TOKENは既存のRaspberry Pi（192.168.0.200）で管理されているため、このJupyterHubサーバーでは不要です。
 
 
 4.4. 名前付きボリュームによるデータ永続化
@@ -335,22 +336,18 @@ docker-compose.ymlのトップレベルにsecretsブロックを定義し、シ�
 	jupyterhub
 	コンテナ間通信用のネットワーク名を指定
 	.envファイル
-	OAUTH_CALLBACK_URL
+	JUPYTERHUB_COOKIE_SECRET
 	jupyterhub
-	GitHub OAuthのコールバックURL
-	.envファイル
-	GITHUB_CLIENT_ID
-	jupyterhub
-	GitHub OAuthクライアントID
-	secrets/github_client_id.txt
-	GITHUB_CLIENT_SECRET
-	jupyterhub
-	GitHub OAuthクライアントシークレット
-	secrets/github_client_secret.txt
+	JupyterHubセッション管理用の秘密鍵
+	secrets/jupyterhub_cookie_secret.txt
+	注記：以下は既存システムで管理
+	-
+	-
+	-
 	CLOUDFLARE_TUNNEL_TOKEN
-	cloudflared
+	既存cloudflared（192.168.0.200）
 	Cloudflare Tunnelを認証するためのトークン
-	secrets/cloudflare_tunnel_token.txt
+	Raspberry Pi（192.168.0.200）で管理
 	
 
 完全なdocker-compose.yml（アノテーション付き）
@@ -373,35 +370,24 @@ services:
      context:./jupyterhub #./jupyterhub/Dockerfile を使用してビルド
    container_name: jupyterhub
    restart: always
+   ports:
+     # 外部アクセス用ポート（既存cloudflaredからルーティング）
+     - "8000:8000"
    environment:
      # jupyterhub_config.py で参照する環境変数
      - DOCKER_NOTEBOOK_IMAGE=${DOCKER_NOTEBOOK_IMAGE}
      - DOCKER_NETWORK_NAME=${COMPOSE_PROJECT_NAME}_default
-     - OAUTH_CALLBACK_URL=${OAUTH_CALLBACK_URL}
-     # シークレットファイルを環境変数として読み込むための設定
-     - GITHUB_CLIENT_ID_FILE=/run/secrets/github_client_id
-     - GITHUB_CLIENT_SECRET_FILE=/run/secrets/github_client_secret
    volumes:
      # Dockerコンテナを起動するためにホストのDockerソケットをマウント
      - /var/run/docker.sock:/var/run/docker.sock:ro
      # Hubのデータベースとクッキーを永続化するためのボリューム
      - jupyterhub-data:/data
-   secrets:
-     - github_client_id
-     - github_client_secret
    networks:
      - default
 
- # Cloudflare Tunnelサービス: 外部からのセキュアなアクセスを提供
- cloudflared:
-   image: cloudflare/cloudflared:latest
-   container_name: cloudflared
-   restart: always
-   command: tunnel --no-autoupdate run --token-file /run/secrets/cloudflare_tunnel_token
-   secrets:
-     - cloudflare_tunnel_token
-   networks:
-     - default
+# cloudflaredサービスは既存のRaspberry Pi（192.168.0.200）で稼働中のため
+# このdocker-compose.ymlでは定義しない
+# 既存のCloudflare Tunnel設定で192.168.0.202:8000へのルーティングを設定
 
 # ユーザーコンテナはDockerSpawnerによって動的に起動されるため、
 # ここには定義しない。
@@ -414,13 +400,12 @@ volumes:
 
 # --- Secrets ---
 # 機密情報をファイルから読み込む
+# GitHub OAuth関連のシークレットはメールアドレス認証に変更したため不要
+# Cloudflare Tunnel Tokenは既存のRaspberry Pi（192.168.0.200）で管理
 secrets:
- github_client_id:
-   file:./secrets/github_client_id.txt
- github_client_secret:
-   file:./secrets/github_client_secret.txt
- cloudflare_tunnel_token:
-   file:./secrets/cloudflare_tunnel_token.txt
+ jupyterhub_cookie_secret:
+   file:./secrets/jupyterhub_cookie_secret.txt
+ # 必要に応じてメールアドレス認証用の追加シークレット
 
 ________________
 
@@ -449,11 +434,11 @@ ________________
    * アクセスポリシーの作成: アプリケーションに誰がアクセスできるかを定義するポリシーを作成します。このポリシーには「Allow」（許可）アクションを設定し、以下のようなルールを含めます 8。
    * Include (いずれか一つを満たせばよい):
    * Emailsが@your-peer-group-domain.comで終わる
-   * または、GitHub Organizationがyour-orgである
+   * または、特定のメールアドレスリストに含まれる
    * Require (すべて満たす必要がある):
    * ユーザーがIDプロバイダで正常に認証されている
 この設定により、自宅サーバーにトラフィックが到達する前に、エッジでIDベースのきめ細やかなファイアウォールが実現します。
-ユーザーリストを管理する場所は、JupyterHubのallowed_users 31 とCloudflare Accessポリシー 7 の2箇所存在します。2つのリストを管理するのは冗長であり、エラーの原因となり得ます。最も合理的なアプローチは、Cloudflare Accessを一次的な、粗粒度の認可レイヤーとして使用することです（例: そもそもこの人物はチームの一員か？）。そして、JupyterHubのOAuthenticatorはより寛容に設定します（例: 特定のGitHub組織のメンバーなら誰でも可）。Cloudflareのチェックを通過しなければJupyterHubのログインページに到達できないため、セキュリティは低下しません。この方法により、管理が簡素化されます。ユーザーをシステム全体から追加・削除するには、一箇所（例: GitHub組織やCloudflare Accessグループ）を管理するだけで済みます。
+ユーザーリストを管理する場所は、JupyterHubのallowed_usersとCloudflare Accessポリシーの2箇所存在します。メールアドレス認証を採用することで、同じメールアドレスリストを両方のシステムで使用でき、管理が大幅に簡素化されます。最も合理的なアプローチは、Cloudflare Accessを一次的な、粗粒度の認可レイヤーとして使用し、JupyterHubのメールアドレス認証で細かいアクセス制御を行うことです。Cloudflareのチェックを通過しなければJupyterHubのログインページに到達できないため、セキュリティは低下しません。この方法により、ユーザーをシステム全体から追加・削除する際に、同じメールアドレスリストを一箇所で管理するだけで済みます。
 
 
 表3: Cloudflareアクセスポリシーの定義
@@ -469,14 +454,15 @@ ________________
 	ドメイン
 	jupyter.yourdomain.com
 	IDプロバイダ
-	GitHub
+	Email / Google
 	ポリシー名
 	Allow Authorized Peers
 	アクション
 	Allow
 	ルール (Include - OR)
-	Selector: GitHub Organization, Value: <Your-Team-Org>
-Selector: Email, Value: user1@email.com
+	Selector: Email, Value: user1@your-domain.com
+Selector: Email, Value: user2@your-domain.com
+Selector: Email domain, Value: @your-team-domain.com
 	ルール (Require - AND)
 	Selector: Authentication Method, Value: Authenticated via IdP
 	________________
